@@ -4,7 +4,10 @@
 Xiaomi OSS 内核发布不完整：drivers/misc/Kconfig 里 source 了
 drivers/misc/hwid/Kconfig，但该目录没有发布（厂商专有驱动被剥离）。
 
-本脚本扫描整棵树的 Kconfig，把任何缺失的 source "path" 创建为空 stub，
+关键：Linux Kconfig 的 source 路径是相对【内核根目录】(srctree)，
+      不是相对当前 Kconfig 文件所在目录。
+
+本脚本扫描整棵树的 Kconfig，把任何缺失的 source 创建为空 stub，
 让 make olddefconfig 能跑下去。
 """
 import os
@@ -12,7 +15,6 @@ import re
 import sys
 
 SOURCES = re.compile(r'^\s*(?:source|rsource|osource)\s+"([^"]+)"', re.M)
-KFILES = ("Kconfig",)
 
 
 def is_kconfig(fn):
@@ -20,10 +22,12 @@ def is_kconfig(fn):
 
 
 def main(root):
+    root = os.path.abspath(root)
     created = []
     scanned = 0
+    skipped_var = 0
+
     for dirpath, dirnames, filenames in os.walk(root):
-        # 跳过 .git 和 out
         dirnames[:] = [d for d in dirnames if d not in (".git", "out", ".repo")]
         for fn in filenames:
             if not is_kconfig(fn):
@@ -37,15 +41,20 @@ def main(root):
             scanned += 1
             for m in SOURCES.finditer(txt):
                 rel = m.group(1)
-                tgt = os.path.normpath(os.path.join(dirpath, rel))
+                # 含变量的路径（$SRCARCH 等）跳过
+                if "$" in rel:
+                    skipped_var += 1
+                    continue
+                # ★ 相对内核根目录
+                tgt = os.path.normpath(os.path.join(root, rel))
                 if os.path.exists(tgt):
                     continue
                 os.makedirs(os.path.dirname(tgt), exist_ok=True)
                 with open(tgt, "w", encoding="utf-8") as f:
                     f.write("# stub: target missing in Xiaomi OSS release\n")
-                created.append(os.path.relpath(tgt, root))
+                created.append(os.path.relpath(tgt, root).replace("\\", "/"))
 
-    print("scanned %d Kconfig files" % scanned)
+    print("scanned %d Kconfig files, skipped %d var-paths" % (scanned, skipped_var))
     print("created %d stubs" % len(created))
     for c in created[:100]:
         print("  + %s" % c)
