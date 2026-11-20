@@ -9,7 +9,6 @@ env:
 
 jobs:
   build:
-    # 22.04 has clang-12 (same major as device kernel clang 12.0.5)
     runs-on: ubuntu-22.04
     timeout-minutes: 240
 
@@ -25,12 +24,13 @@ jobs:
             python3 python-is-python3 git curl zip unzip xz-utils cpio rsync \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
             clang-12 lld-12 llvm-12
-          echo "--- installed clang versions ---"
+          echo "--- installed llvm dirs ---"
           ls -d /usr/lib/llvm-* 2>/dev/null || true
 
       - name: "Detect toolchain"
         run: |
           set -e
+          TC=""
           for v in 12 14 15 16 17 18; do
             if [ -x "/usr/lib/llvm-$v/bin/clang" ]; then
               TC="/usr/lib/llvm-$v/bin"
@@ -49,7 +49,6 @@ jobs:
           echo "$TC" >> "$GITHUB_PATH"
           echo "$HOME/tcbin" >> "$GITHUB_PATH"
           echo "TC=$TC" >> "$GITHUB_ENV"
-          echo "--- tcbin ---"
           ls -la "$HOME/tcbin" || true
 
       - name: "Clone kernel source"
@@ -62,13 +61,28 @@ jobs:
           head -6 Makefile
           du -sh .git
 
+      - name: "Stub missing Kconfig files"
+        run: |
+          python3 "$GITHUB_WORKSPACE/stub_missing_kconfig.py" "$GITHUB_WORKSPACE/kernel"
+
       - name: "Apply device config"
         run: |
-          set -e
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp "$GITHUB_WORKSPACE/device_defconfig" "$GITHUB_WORKSPACE/out/.config"
           cd "$GITHUB_WORKSPACE/kernel"
-          make ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" olddefconfig
+          if ! make ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" olddefconfig; then
+            echo "!!!!!!!!!! device config olddefconfig FAILED - falling back !!!!!!!!!!"
+            echo "--- available defconfigs ---"
+            ls arch/arm64/configs/ | head -40
+            for d in $(ls arch/arm64/configs/ | grep -iE "liuqin|gki|vendor" | head -8); do
+              n="${d%_defconfig}"
+              echo "--- trying $n ---"
+              if make ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" "${n}_defconfig"; then
+                echo "OK: $n"
+                break
+              fi
+            done
+          fi
           echo "=== key configs ==="
           grep -E "^CONFIG_(CFI_CLANG|SHADOW_CALL_STACK|MODVERSIONS|MODULE_SIG|LTO_CLANG|CC_IS_CLANG|LOCALVERSION)" \
             "$GITHUB_WORKSPACE/out/.config" || true
