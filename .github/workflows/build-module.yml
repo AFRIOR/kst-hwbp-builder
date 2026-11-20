@@ -6,11 +6,11 @@ on:
 env:
   KERNEL_REPO: "https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git"
   KERNEL_BRANCH: "liuqin-t-oss"
-  CLANG_VER: "clang-r416183b"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 22.04 有 clang-12（与设备内核 clang 12.0.5 同大版本）
+    runs-on: ubuntu-22.04
     timeout-minutes: 240
 
     steps:
@@ -20,19 +20,34 @@ jobs:
       - name: "\u2699\uFE0F Install prerequisites"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential bc bison flex libssl-dev \
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex libssl-dev libelf-dev \
             python3 python-is-python3 git curl zip unzip xz-utils cpio rsync \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler libelf-dev
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
+            clang-12 lld-12 llvm-12 || \
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            python3 git curl zip unzip xz-utils cpio rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
+            clang lld llvm
 
-      - name: "\U0001F4E6 Get clang 12.0.5 (r416183b)"
+      - name: "\U0001F50D Detect toolchain"
         run: |
           set -e
-          mkdir -p "$GITHUB_WORKSPACE/tc/${CLANG_VER}"
-          curl -fsSL --retry 5 --retry-delay 3 -o /tmp/clang.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/${CLANG_VER}.tar.gz"
-          tar -xzf /tmp/clang.tar.gz -C "$GITHUB_WORKSPACE/tc/${CLANG_VER}"
-          chmod +x "$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin/"* || true
-          "$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin/clang" --version
+          echo "=== try llvm-12 ==="
+          if [ -x /usr/lib/llvm-12/bin/clang ]; then
+            /usr/lib/llvm-12/bin/clang --version
+            echo "TC=/usr/lib/llvm-12/bin" >> $GITHUB_ENV
+          elif [ -x /usr/lib/llvm-14/bin/clang ]; then
+            /usr/lib/llvm-14/bin/clang --version
+            echo "TC=/usr/lib/llvm-14/bin" >> $GITHUB_ENV
+          else
+            which clang && clang --version
+            TC=$(dirname $(which clang))
+            echo "TC=$TC" >> $GITHUB_ENV
+          fi
+          echo "--- resolved TC=$TC ---"
+          ls -la ${TC}/clang ${TC}/ld.lld ${TC}/llvm-ar ${TC}/llvm-nm ${TC}/llvm-objcopy ${TC}/llvm-objdump 2>&1 || true
 
       - name: "\U0001F33F Clone kernel source"
         run: |
@@ -41,7 +56,6 @@ jobs:
           cd "$GITHUB_WORKSPACE/kernel"
           echo "--- kernel version ---"
           head -6 Makefile
-          echo "--- .git size ---"
           du -sh .git
 
       - name: "\U0001F527 Apply device config"
@@ -50,37 +64,30 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp "$GITHUB_WORKSPACE/device_defconfig" "$GITHUB_WORKSPACE/out/.config"
           cd "$GITHUB_WORKSPACE/kernel"
-          export PATH="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin:$PATH"
-          MAKE_ARGS="ARCH=arm64 LLVM=1 O=$GITHUB_WORKSPACE/out"
-          make $MAKE_ARGS olddefconfig
+          make ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" CC="${TC}/clang" olddefconfig
           echo "=== key configs ==="
           grep -E "^CONFIG_(CFI_CLANG|SHADOW_CALL_STACK|MODVERSIONS|MODULE_SIG|LTO_CLANG|CC_IS_CLANG|LOCALVERSION)" \
             "$GITHUB_WORKSPACE/out/.config" || true
-          echo "=== save final config as artifact ==="
           cp "$GITHUB_WORKSPACE/out/.config" "$GITHUB_WORKSPACE/final_defconfig"
 
       - name: "\U0001F3D7\uFE0F modules_prepare"
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/kernel"
-          export PATH="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin:$PATH"
-          TC="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin"
           make -j$(nproc) ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" \
-            CC="$TC/clang" LD="$TC/ld.lld" AR="$TC/llvm-ar" NM="$TC/llvm-nm" \
-            OBJCOPY="$TC/llvm-objcopy" OBJDUMP="$TC/llvm-objdump" \
-            STRIP="$TC/llvm-strip" READELF="$TC/llvm-readelf" \
+            CC="${TC}/clang" LD="${TC}/ld.lld" AR="${TC}/llvm-ar" NM="${TC}/llvm-nm" \
+            OBJCOPY="${TC}/llvm-objcopy" OBJDUMP="${TC}/llvm-objdump" \
+            STRIP="${TC}/llvm-strip" READELF="${TC}/llvm-readelf" \
             modules_prepare
 
       - name: "\U0001F528 Build module"
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/kernel"
-          export PATH="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin:$PATH"
-          TC="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin"
           make -j$(nproc) ARCH=arm64 LLVM=1 O="$GITHUB_WORKSPACE/out" \
-            CC="$TC/clang" LD="$TC/ld.lld" AR="$TC/llvm-ar" NM="$TC/llvm-nm" \
-            OBJCOPY="$TC/llvm-objcopy" OBJDUMP="$TC/llvm-objdump" \
-            STRIP="$TC/llvm-strip" READELF="$TC/llvm-readelf" \
+            CC="${TC}/clang" LD="${TC}/ld.lld" AR="${TC}/llvm-ar" NM="${TC}/llvm-nm" \
+            OBJCOPY="${TC}/llvm-objcopy" OBJDUMP="${TC}/llvm-objdump" \
+            STRIP="${TC}/llvm-strip" READELF="${TC}/llvm-readelf" \
             M="$GITHUB_WORKSPACE/module" modules
 
       - name: "\U0001F527 Patch __versions with device CRCs"
@@ -89,18 +96,17 @@ jobs:
 
       - name: "\U0001F50D Inspect result"
         run: |
-          TC="$GITHUB_WORKSPACE/tc/${CLANG_VER}/bin"
           echo "=== built artifacts ==="
           find "$GITHUB_WORKSPACE/module" -name "*.ko" -exec ls -la {} \;
           for f in $(find "$GITHUB_WORKSPACE/module" -name "*.ko"); do
             echo ""
             echo "########## $f ##########"
             echo "--- modinfo ---"
-            "$TC/llvm-objdump" -s -j .modinfo "$f" 2>/dev/null | head -20 || true
+            "${TC}/llvm-objdump" -s -j .modinfo "$f" 2>/dev/null | head -20 || true
             echo "--- sections ---"
-            "$TC/llvm-objdump" -h "$f" | head -30 || true
-            echo "--- undefined symbols (should be empty or standard kernel syms) ---"
-            "$TC/llvm-nm" -u "$f" || true
+            "${TC}/llvm-objdump" -h "$f" | head -30 || true
+            echo "--- undefined symbols ---"
+            "${TC}/llvm-nm" -u "$f" || true
           done
 
       - name: "\U0001F4E4 Upload .ko"
