@@ -1,1 +1,3 @@
+# keep warnings non-fatal: vendor kernel builds with -Werror
+ccflags-y += -Wno-error
 obj-m += ksthwbp.o

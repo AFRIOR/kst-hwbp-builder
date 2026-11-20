@@ -45,6 +45,11 @@ DEVICE_CRC = {
     "jiffies":                          0x15ba50a6,
     "complete":                         0xa6257a2f,
     "wait_for_completion":              0x25974000,
+    # task helpers (Xiaomi signature takes a real task_struct *)
+    "__put_task_struct":                0x9a80f9a6,
+    "get_pid_task":                     0xd15a2984,
+    "find_vpid":                        0x12aec6f2,
+    "pid_task":                         0x918779bc,
 }
 
 
